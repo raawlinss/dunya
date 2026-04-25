@@ -1,0 +1,2319 @@
+<!doctype html>
+<html lang="az">
+<head>
+<meta charset="utf-8" />
+<title>Atlas · 3D Map Explorer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Instrument+Serif&display=swap" rel="stylesheet">
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+
+<style>
+  :root {
+    --bg: #0a0d12;
+    --panel: rgba(16, 20, 28, 0.72);
+    --panel-solid: #10141c;
+    --border: rgba(255,255,255,0.08);
+    --border-strong: rgba(255,255,255,0.16);
+    --text: #f4f5f7;
+    --text-dim: #8b92a1;
+    --text-faint: #555b68;
+    --accent: #ff7a3d;
+    --accent-glow: rgba(255, 122, 61, 0.4);
+    --blue: #4ea1ff;
+    --good: #7ddb9e;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', -apple-system, system-ui, sans-serif;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  #map {
+    position: absolute;
+    inset: 0;
+    background: transparent;
+    z-index: 1;
+  }
+
+  /* Cosmos background canvas: stars + galactic haze behind the globe */
+  #cosmos {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(ellipse at 70% 30%, rgba(60,90,180,0.12) 0%, transparent 45%),
+      radial-gradient(ellipse at 20% 80%, rgba(180,80,60,0.08) 0%, transparent 50%),
+      radial-gradient(circle at center, #05070c 0%, #020306 90%);
+    opacity: 0;
+    transition: opacity 1.2s ease;
+  }
+  #cosmos.on { opacity: 1; }
+
+  /* Atmosphere glow halo around the globe */
+  #atmosphere {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 2;
+    opacity: 0;
+    transition: opacity 1.2s ease;
+    background: radial-gradient(circle at 50% 55%,
+      transparent 0%,
+      transparent 33%,
+      rgba(110,170,255,0.05) 36%,
+      rgba(110,170,255,0.10) 38%,
+      rgba(110,170,255,0.04) 42%,
+      transparent 50%);
+    mix-blend-mode: screen;
+  }
+  #atmosphere.on { opacity: 1; }
+
+  /* ============ Loader ============ */
+  .loader {
+    position: fixed; inset: 0;
+    background: radial-gradient(ellipse at center, #131a26 0%, #070a10 80%);
+    z-index: 1000;
+    display: grid;
+    place-items: center;
+    transition: opacity 0.6s ease;
+  }
+  .loader.hide { opacity: 0; pointer-events: none; }
+  .loader-inner {
+    text-align: center;
+  }
+  .loader-logo {
+    font-family: 'Instrument Serif', serif;
+    font-size: 52px;
+    letter-spacing: 0.02em;
+    margin-bottom: 12px;
+    background: linear-gradient(180deg, #fff 0%, #8b92a1 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .loader-sub {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 32px;
+  }
+  .loader-bar {
+    width: 200px;
+    height: 1px;
+    background: rgba(255,255,255,0.08);
+    margin: 0 auto;
+    overflow: hidden;
+    position: relative;
+  }
+  .loader-bar::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    width: 40%;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    animation: sweep 1.6s infinite ease-in-out;
+  }
+  @keyframes sweep {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(350%); }
+  }
+
+  /* ============ Top bar ============ */
+  .topbar {
+    position: fixed;
+    top: 20px; left: 20px;
+    display: flex; align-items: center; gap: 14px;
+    background: var(--panel);
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 10px 14px;
+    z-index: 10;
+    box-shadow: 0 20px 40px -20px rgba(0,0,0,0.5);
+  }
+  .brand-dot {
+    width: 28px; height: 28px;
+    border-radius: 8px;
+    background:
+      radial-gradient(circle at 30% 30%, #ffb07a 0%, #ff7a3d 45%, #c8461c 100%);
+    box-shadow: 0 0 20px var(--accent-glow), inset 0 1px 1px rgba(255,255,255,0.3);
+    position: relative;
+  }
+  .brand-dot::after {
+    content: '';
+    position: absolute;
+    inset: 4px;
+    border-radius: 5px;
+    background: repeating-linear-gradient(45deg,
+      transparent 0 2px, rgba(0,0,0,0.15) 2px 3px);
+  }
+  .brand-title {
+    font-family: 'Instrument Serif', serif;
+    font-size: 20px;
+    letter-spacing: 0.01em;
+  }
+  .brand-sub {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-top: -2px;
+  }
+
+  /* ============ Search ============ */
+  .search-wrap {
+    position: fixed;
+    top: 20px; left: 50%;
+    transform: translateX(-50%);
+    width: min(480px, 50vw);
+    z-index: 10;
+  }
+  .search-box {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--panel);
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 12px 16px;
+    box-shadow: 0 20px 40px -20px rgba(0,0,0,0.5);
+    transition: border-color 0.2s ease;
+  }
+  .search-box:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow), 0 20px 40px -20px rgba(0,0,0,0.5);
+  }
+  .search-box svg {
+    width: 16px; height: 16px; flex-shrink: 0;
+    color: var(--text-dim);
+  }
+  .search-box input {
+    flex: 1;
+    background: transparent;
+    border: none; outline: none;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 14px;
+  }
+  .search-box input::placeholder { color: var(--text-faint); }
+  .search-kbd {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--text-faint);
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    letter-spacing: 0.05em;
+  }
+  .search-results {
+    margin-top: 8px;
+    background: var(--panel-solid);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    max-height: 320px;
+    overflow-y: auto;
+    box-shadow: 0 30px 60px -20px rgba(0,0,0,0.6);
+    display: none;
+  }
+  .search-results.open { display: block; }
+  .search-result {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.12s ease;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .search-result:last-child { border-bottom: none; }
+  .search-result:hover,
+  .search-result.active { background: rgba(255,255,255,0.04); }
+  .search-result .pin {
+    width: 28px; height: 28px; flex-shrink: 0;
+    border-radius: 6px;
+    background: rgba(255,122,61,0.12);
+    color: var(--accent);
+    display: grid; place-items: center;
+  }
+  .search-result .pin svg { width: 14px; height: 14px; }
+  .search-result .info { flex: 1; min-width: 0; }
+  .search-result .name {
+    font-size: 13px; font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .search-result .desc {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: 'JetBrains Mono', monospace;
+    margin-top: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .search-empty {
+    padding: 16px;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+  .search-loading {
+    padding: 16px;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  /* ============ Places Panel (Left) ============ */
+  .places-panel {
+    position: fixed;
+    top: 90px; left: 20px;
+    width: 260px;
+    background: var(--panel);
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px;
+    z-index: 9;
+    max-height: calc(100vh - 120px);
+    overflow-y: auto;
+    box-shadow: 0 20px 40px -20px rgba(0,0,0,0.5);
+  }
+  .panel-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .panel-title .count { color: var(--accent); }
+  .place-item {
+    padding: 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.12s ease;
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 2px;
+  }
+  .place-item:hover { background: rgba(255,255,255,0.04); }
+  .place-item.active {
+    background: rgba(255,122,61,0.08);
+    box-shadow: inset 0 0 0 1px rgba(255,122,61,0.25);
+  }
+  .place-flag {
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    flex-shrink: 0;
+    display: grid; place-items: center;
+    font-size: 14px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    font-family: 'Instrument Serif', serif;
+    color: var(--text);
+  }
+  .place-info { flex: 1; min-width: 0; }
+  .place-name {
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .place-region {
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text-dim);
+    letter-spacing: 0.04em;
+    margin-top: 1px;
+  }
+
+  /* ============ Info Card (right) ============ */
+  .info-card {
+    position: fixed;
+    top: 20px; right: 20px;
+    width: 300px;
+    background: var(--panel);
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px;
+    z-index: 10;
+    box-shadow: 0 20px 40px -20px rgba(0,0,0,0.5);
+    transition: transform 0.3s ease, opacity 0.3s ease;
+  }
+  .info-card .kicker {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+  .info-card h2 {
+    font-family: 'Instrument Serif', serif;
+    font-size: 26px;
+    line-height: 1.1;
+    margin: 0 0 8px;
+    font-weight: 400;
+  }
+  .info-card .region {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 14px;
+  }
+  .info-card .coords {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding: 10px;
+    background: rgba(0,0,0,0.3);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .info-card .coords .label {
+    font-size: 8.5px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: 3px;
+  }
+  .info-card .coords .value {
+    font-size: 12px;
+    color: var(--text);
+  }
+  .info-card .stat-row {
+    display: flex; justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px dashed var(--border);
+    font-size: 11.5px;
+  }
+  .info-card .stat-row:last-child { border-bottom: none; }
+  .info-card .stat-row .k { color: var(--text-dim); }
+  .info-card .stat-row .v {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text);
+  }
+
+  /* ============ Bottom-right controls ============ */
+  .controls {
+    position: fixed;
+    bottom: 20px; right: 20px;
+    display: flex; flex-direction: column; gap: 8px;
+    z-index: 10;
+  }
+  .ctrl-btn {
+    width: 44px; height: 44px;
+    background: var(--panel);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    cursor: pointer;
+    display: grid; place-items: center;
+    transition: all 0.15s ease;
+    position: relative;
+  }
+  .ctrl-btn:hover {
+    border-color: var(--border-strong);
+    background: rgba(20,24,32,0.85);
+  }
+  .ctrl-btn.active {
+    border-color: var(--accent);
+    background: rgba(255,122,61,0.12);
+    color: var(--accent);
+  }
+  .ctrl-btn svg { width: 18px; height: 18px; }
+  .ctrl-label {
+    position: absolute;
+    right: 52px;
+    top: 50%;
+    transform: translateY(-50%) translateX(4px);
+    background: var(--panel-solid);
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.12s, transform 0.12s;
+  }
+  .ctrl-btn:hover .ctrl-label {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
+
+  /* ============ Compass (top right below info, or bottom-left?) ============ */
+  .compass {
+    position: fixed;
+    bottom: 20px; left: 20px;
+    width: 120px;
+    background: var(--panel);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 12px;
+    z-index: 10;
+    box-shadow: 0 20px 40px -20px rgba(0,0,0,0.5);
+  }
+  .compass-ring {
+    width: 96px; height: 96px;
+    margin: 0 auto;
+    position: relative;
+    border-radius: 50%;
+    border: 1px solid var(--border-strong);
+    background:
+      radial-gradient(circle at 30% 30%, rgba(255,255,255,0.04) 0%, transparent 60%),
+      radial-gradient(circle, rgba(255,122,61,0.04) 0%, transparent 70%);
+  }
+  .compass-ring::before {
+    content: '';
+    position: absolute; inset: 8px;
+    border-radius: 50%;
+    border: 1px dashed var(--border);
+  }
+  .compass-arrow {
+    position: absolute;
+    left: 50%; top: 50%;
+    width: 2px; height: 38px;
+    background: linear-gradient(180deg, var(--accent) 0%, transparent 100%);
+    transform-origin: center bottom;
+    transform: translate(-50%, -100%) rotate(0deg);
+    transition: transform 0.1s linear;
+  }
+  .compass-arrow::before {
+    content: '';
+    position: absolute;
+    left: 50%; top: -4px;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-bottom: 10px solid var(--accent);
+    filter: drop-shadow(0 0 4px var(--accent-glow));
+  }
+  .compass-south {
+    position: absolute;
+    left: 50%; top: 50%;
+    width: 2px; height: 28px;
+    background: linear-gradient(0deg, var(--text-faint) 0%, transparent 100%);
+    transform-origin: center top;
+    transform: translate(-50%, 0) rotate(0deg);
+    transition: transform 0.1s linear;
+  }
+  .compass-labels {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    color: var(--text-dim);
+  }
+  .compass-labels span {
+    position: absolute;
+    transform: translate(-50%, -50%);
+  }
+  .compass-labels .n { top: -4px; left: 50%; color: var(--accent); }
+  .compass-labels .s { bottom: -12px; top: auto; left: 50%; }
+  .compass-labels .e { top: 50%; right: -10px; left: auto; }
+  .compass-labels .w { top: 50%; left: -4px; }
+  .compass-readout {
+    margin-top: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    color: var(--text-dim);
+    text-align: center;
+    letter-spacing: 0.08em;
+    display: flex; justify-content: space-around;
+  }
+  .compass-readout .v { color: var(--text); }
+
+  /* ============ Traffic legend ============ */
+  .traffic-legend {
+    position: fixed;
+    top: 20px;
+    right: 340px;
+    background: var(--panel);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 14px;
+    z-index: 10;
+    font-size: 11px;
+    color: var(--text);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-4px);
+    transition: opacity 0.25s ease, transform 0.25s ease;
+  }
+  .traffic-legend.on { opacity: 1; transform: translateY(0); }
+  .tl-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px; letter-spacing: 0.22em;
+    text-transform: uppercase; color: var(--text-dim);
+    margin-bottom: 6px;
+  }
+  .tl-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+  .tl-dot { width: 10px; height: 10px; border-radius: 50%; box-shadow: 0 0 8px currentColor; }
+  .tl-dot.good { background: #3dd38a; color: #3dd38a; }
+  .tl-dot.mod  { background: #ffb03d; color: #ffb03d; }
+  .tl-dot.bad  { background: #ff3d5c; color: #ff3d5c; }
+
+  /* ============ Status bar (bottom center) ============ */
+  .statusbar {
+    position: fixed;
+    bottom: 20px; left: 50%;
+    transform: translateX(-50%);
+    display: flex; align-items: center; gap: 20px;
+    background: var(--panel);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 10px 20px;
+    z-index: 10;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
+  }
+  .statusbar .sep { width: 1px; height: 14px; background: var(--border); }
+  .statusbar .live::before {
+    content: '';
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--good);
+    margin-right: 6px;
+    vertical-align: middle;
+    box-shadow: 0 0 6px var(--good);
+    animation: pulse 1.8s infinite ease-in-out;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+  .statusbar .val { color: var(--text); }
+
+  /* ============ Scrollbar polish ============ */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.08);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.16); }
+
+  /* ============ Hide default MapLibre attribution chip ============ */
+  .maplibregl-ctrl-attrib {
+    background: rgba(0,0,0,0.4) !important;
+    color: var(--text-dim) !important;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px !important;
+    backdrop-filter: blur(8px);
+  }
+  .maplibregl-ctrl-attrib a { color: var(--text-dim) !important; }
+
+  /* ============ Responsive ============ */
+  @media (max-width: 960px) {
+    .places-panel { display: none; }
+    .info-card { width: 240px; padding: 14px; }
+    .traffic-legend { right: 270px; }
+  }
+  @media (max-width: 768px) {
+    .topbar { top: 12px; left: 12px; padding: 8px 12px; }
+    .brand-sub { display: none; }
+    .search-wrap {
+      top: 12px; left: 12px; right: 12px;
+      width: auto;
+      transform: none;
+    }
+    .topbar { display: none; }
+    .info-card {
+      top: auto; bottom: 80px;
+      right: 12px; left: 12px;
+      width: auto;
+      max-height: 38vh;
+      overflow-y: auto;
+      padding: 12px 14px;
+    }
+    .info-card h2 { font-size: 20px; }
+    .info-card .stat-row { padding: 4px 0; font-size: 11px; }
+    .compass { display: none; }
+    .traffic-legend {
+      top: auto; bottom: 76px;
+      right: 12px; left: auto;
+      padding: 8px 10px;
+    }
+    .controls {
+      bottom: 12px; right: 12px;
+      flex-direction: row;
+      flex-wrap: wrap;
+      max-width: calc(100vw - 24px);
+      justify-content: flex-end;
+    }
+    .ctrl-btn { width: 40px; height: 40px; }
+    .ctrl-btn .ctrl-label { display: none; }
+    .statusbar { display: none; }
+    .route-panel {
+      top: 64px; left: 12px; right: 12px;
+      width: auto;
+    }
+  }
+  @media (max-width: 480px) {
+    .info-card { max-height: 30vh; }
+    .ctrl-btn { width: 38px; height: 38px; }
+    .ctrl-btn svg { width: 16px; height: 16px; }
+  }
+
+  /* ============ MOON ============ */
+  #moon {
+    position: fixed;
+    z-index: 3;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 1.4s ease;
+    width: 110px; height: 110px;
+    top: 12vh; right: 8vw;
+    cursor: pointer;
+  }
+  #moon.on { opacity: 1; pointer-events: auto; }
+  #moon:hover .moon-body { filter: brightness(1.15); }
+  .moon-body {
+    width: 100%; height: 100%;
+    border-radius: 50%;
+    background:
+      radial-gradient(circle at 35% 35%, #fdf6e0 0%, #ddd2b3 30%, #9a8d72 70%, #4a4133 100%);
+    box-shadow:
+      inset -14px -14px 32px rgba(0,0,0,0.55),
+      inset 6px 6px 14px rgba(255,255,255,0.18),
+      0 0 40px rgba(255, 230, 170, 0.18),
+      0 0 90px rgba(255, 220, 160, 0.10);
+    position: relative;
+    overflow: hidden;
+    transition: filter 0.3s;
+  }
+  .moon-body::before, .moon-body::after {
+    content: '';
+    position: absolute;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(0,0,0,0.35) 0%, transparent 65%);
+  }
+  .moon-body::before { width: 22%; height: 22%; top: 30%; left: 25%; }
+  .moon-body::after { width: 14%; height: 14%; top: 58%; left: 55%; }
+  .moon-crater {
+    position: absolute;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(0,0,0,0.3) 0%, transparent 70%);
+  }
+  .moon-label {
+    position: absolute;
+    top: 50%; left: -110px;
+    transform: translateY(-50%);
+    font-family: 'Instrument Serif', serif;
+    font-size: 16px;
+    color: #f6ecd2;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    opacity: 0.85;
+    text-align: right;
+    width: 100px;
+    text-shadow: 0 0 12px rgba(0,0,0,0.6);
+  }
+  .moon-label .sub {
+    display: block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    color: rgba(246,236,210,0.55);
+    margin-top: 4px;
+    letter-spacing: 0.16em;
+  }
+  @media (max-width: 768px) {
+    #moon { width: 70px; height: 70px; top: 10vh; right: 14px; }
+    .moon-label { display: none; }
+  }
+
+  /* Moon scene overlay */
+  #moon-scene {
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse at 50% 70%, #2a2418 0%, #0a0805 60%, #000 100%);
+    z-index: 50;
+    display: none;
+    overflow: hidden;
+  }
+  #moon-scene.on { display: block; }
+  #moon-scene .moon-surface {
+    position: absolute;
+    bottom: -30vh;
+    left: -10vw; right: -10vw;
+    height: 60vh;
+    border-radius: 50% 50% 0 0 / 30% 30% 0 0;
+    background:
+      radial-gradient(ellipse at 30% 20%, #c9b78f 0%, #8a7855 40%, #4d3f29 80%);
+    box-shadow: inset 0 60px 120px rgba(0,0,0,0.6);
+  }
+  #moon-scene .moon-surface::before {
+    content: '';
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(circle at 20% 30%, rgba(0,0,0,0.45) 0%, transparent 8%),
+      radial-gradient(circle at 50% 22%, rgba(0,0,0,0.4) 0%, transparent 6%),
+      radial-gradient(circle at 75% 28%, rgba(0,0,0,0.5) 0%, transparent 9%),
+      radial-gradient(circle at 35% 45%, rgba(0,0,0,0.35) 0%, transparent 5%),
+      radial-gradient(circle at 65% 50%, rgba(0,0,0,0.4) 0%, transparent 7%),
+      radial-gradient(circle at 10% 60%, rgba(0,0,0,0.3) 0%, transparent 6%);
+    border-radius: inherit;
+  }
+  #moon-scene .earth {
+    position: absolute;
+    top: 12vh; left: 50%;
+    transform: translateX(-50%);
+    width: 220px; height: 220px;
+    border-radius: 50%;
+    background:
+      radial-gradient(circle at 30% 30%, #4ea1ff 0%, #2566c8 40%, #0a3a7a 80%, #061d44 100%);
+    box-shadow:
+      inset -22px -22px 50px rgba(0,0,0,0.55),
+      inset 12px 12px 26px rgba(255,255,255,0.18),
+      0 0 60px rgba(80,160,255,0.35),
+      0 0 140px rgba(80,160,255,0.18);
+  }
+  #moon-scene .earth::after {
+    content: '';
+    position: absolute; inset: 8%;
+    border-radius: 50%;
+    background:
+      radial-gradient(ellipse at 25% 30%, rgba(120,200,140,0.4) 0%, transparent 25%),
+      radial-gradient(ellipse at 55% 55%, rgba(180,220,160,0.35) 0%, transparent 18%),
+      radial-gradient(ellipse at 70% 35%, rgba(160,200,140,0.3) 0%, transparent 22%);
+    mix-blend-mode: screen;
+  }
+  #moon-scene .moon-info {
+    position: absolute;
+    top: 24px; left: 24px;
+    background: rgba(20,16,10,0.7);
+    border: 1px solid rgba(255,220,160,0.2);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-radius: 14px;
+    padding: 18px 22px;
+    max-width: 320px;
+    color: #f6ecd2;
+  }
+  #moon-scene .moon-info .kicker {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: #c9b78f;
+    margin-bottom: 8px;
+  }
+  #moon-scene .moon-info h2 {
+    font-family: 'Instrument Serif', serif;
+    font-size: 32px;
+    margin: 0 0 6px;
+    font-weight: 400;
+  }
+  #moon-scene .moon-info p {
+    font-size: 12.5px;
+    color: rgba(246,236,210,0.7);
+    line-height: 1.6;
+    margin: 0 0 12px;
+  }
+  #moon-scene .moon-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    margin-top: 10px;
+  }
+  #moon-scene .moon-stats div { padding: 6px 0; border-top: 1px solid rgba(255,220,160,0.12); }
+  #moon-scene .moon-stats .k { color: rgba(246,236,210,0.5); display: block; font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; }
+  #moon-scene .back-btn {
+    position: absolute;
+    top: 24px; right: 24px;
+    background: rgba(20,16,10,0.7);
+    border: 1px solid rgba(255,220,160,0.2);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-radius: 999px;
+    padding: 10px 18px;
+    color: #f6ecd2;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    display: flex; align-items: center; gap: 8px;
+    z-index: 2;
+  }
+  #moon-scene .back-btn:hover { background: rgba(40,32,20,0.9); }
+  #moon-scene .stars {
+    position: absolute; inset: 0;
+    background-image:
+      radial-gradient(1px 1px at 10% 20%, white, transparent),
+      radial-gradient(1px 1px at 30% 50%, white, transparent),
+      radial-gradient(1px 1px at 50% 30%, white, transparent),
+      radial-gradient(1px 1px at 70% 60%, white, transparent),
+      radial-gradient(1px 1px at 80% 15%, white, transparent),
+      radial-gradient(1px 1px at 25% 75%, white, transparent),
+      radial-gradient(1px 1px at 60% 45%, white, transparent),
+      radial-gradient(1px 1px at 90% 80%, white, transparent),
+      radial-gradient(1px 1px at 15% 90%, white, transparent),
+      radial-gradient(1px 1px at 45% 10%, white, transparent);
+    opacity: 0.6;
+  }
+
+  /* ============ ROUTE PANEL ============ */
+  .route-toggle {
+    position: fixed;
+    top: 80px; left: 20px;
+    background: var(--panel);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 10px 16px;
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+    z-index: 11;
+    display: flex; align-items: center; gap: 8px;
+    font-family: inherit;
+  }
+  .route-toggle:hover { border-color: var(--accent); color: var(--accent); }
+  .route-toggle svg { width: 14px; height: 14px; }
+
+  .route-panel {
+    position: fixed;
+    top: 80px; left: 290px;
+    width: 320px;
+    background: var(--panel);
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 16px;
+    z-index: 11;
+    display: none;
+    box-shadow: 0 20px 40px -20px rgba(0,0,0,0.5);
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+  }
+  .route-panel.open { display: block; }
+  .route-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 14px;
+  }
+  .route-header .title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .route-header .close {
+    background: none; border: none; color: var(--text-dim);
+    cursor: pointer; font-size: 18px; padding: 0; width: 22px; height: 22px;
+  }
+  .route-modes {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 6px; margin-bottom: 14px;
+  }
+  .route-mode {
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    transition: all 0.15s;
+  }
+  .route-mode:hover { border-color: var(--border-strong); }
+  .route-mode.active {
+    border-color: var(--accent);
+    background: rgba(255,122,61,0.12);
+    color: var(--accent);
+  }
+  .route-mode svg { width: 14px; height: 14px; }
+  .route-input {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    background: rgba(0,0,0,0.2);
+  }
+  .route-input.from-input { border-left: 3px solid #3dd38a; }
+  .route-input.to-input { border-left: 3px solid var(--accent); }
+  .route-input input {
+    flex: 1; background: transparent; border: none; outline: none;
+    color: var(--text); font-family: inherit; font-size: 12.5px;
+  }
+  .route-input input::placeholder { color: var(--text-faint); }
+  .route-input .pick {
+    background: none; border: none; color: var(--text-dim); cursor: pointer;
+    font-size: 11px; padding: 4px;
+  }
+  .route-input .pick:hover { color: var(--accent); }
+  .route-input .pick.armed { color: var(--accent); }
+  .route-actions {
+    display: flex; gap: 6px; margin-top: 8px;
+  }
+  .route-go {
+    flex: 1;
+    background: var(--accent);
+    color: #1a0f08;
+    border: none;
+    border-radius: 8px;
+    padding: 10px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+  .route-go:hover { background: #ff8b50; }
+  .route-go:disabled { opacity: 0.5; cursor: not-allowed; }
+  .route-clear {
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+  }
+  .route-summary {
+    margin-top: 14px;
+    padding: 12px;
+    background: rgba(255,122,61,0.06);
+    border: 1px solid rgba(255,122,61,0.2);
+    border-radius: 10px;
+    display: none;
+  }
+  .route-summary.on { display: block; }
+  .route-summary .big {
+    display: flex; gap: 16px; align-items: baseline;
+    margin-bottom: 8px;
+  }
+  .route-summary .duration {
+    font-family: 'Instrument Serif', serif;
+    font-size: 26px;
+    color: var(--accent);
+  }
+  .route-summary .distance {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .route-steps {
+    margin-top: 10px;
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+    max-height: 200px;
+    overflow-y: auto;
+    font-size: 11.5px;
+    line-height: 1.5;
+  }
+  .route-step {
+    display: flex; gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px dashed var(--border);
+  }
+  .route-step:last-child { border-bottom: none; }
+  .route-step .num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    color: var(--text-faint);
+    min-width: 22px;
+    padding-top: 2px;
+  }
+  .route-step .txt { flex: 1; color: var(--text); }
+  .route-step .dist {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    color: var(--text-dim);
+  }
+
+  /* Old responsive block (kept for compatibility, will not duplicate) */
+</style>
+</head>
+
+<body>
+
+<!-- Loader -->
+<div class="loader" id="loader">
+  <div class="loader-inner">
+    <div class="loader-logo">Atlas</div>
+    <div class="loader-sub">Initializing 3D terrain</div>
+    <div class="loader-bar"></div>
+  </div>
+</div>
+
+<!-- Cosmos (stars) behind the map when zoomed out -->
+<canvas id="cosmos"></canvas>
+
+<!-- Map -->
+<div id="map"></div>
+
+<!-- Atmosphere halo -->
+<div id="atmosphere"></div>
+
+<!-- Top bar: brand -->
+<div class="topbar">
+  <div class="brand-dot"></div>
+  <div>
+    <div class="brand-title">Atlas</div>
+    <div class="brand-sub">3D · Explorer</div>
+  </div>
+</div>
+
+<!-- Search -->
+<div class="search-wrap">
+  <div class="search-box">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/></svg>
+    <input id="search-input" type="text" placeholder="Şəhər, ölkə və ya ünvan axtarın..." autocomplete="off" />
+    <span class="search-kbd">⏎</span>
+  </div>
+  <div class="search-results" id="search-results"></div>
+</div>
+
+<!-- Places panel -->
+<div class="places-panel" id="places-panel">
+  <div class="panel-title">
+    <span>Məşhur yerlər</span>
+    <span class="count" id="place-count">—</span>
+  </div>
+  <div id="place-list"></div>
+</div>
+
+<!-- Info card -->
+<div class="info-card" id="info-card">
+  <div class="kicker">Cari mövqe</div>
+  <h2 id="info-name">Bakı</h2>
+  <div class="region" id="info-region">Azərbaycan · Xəzər dənizi sahili</div>
+  <div class="coords">
+    <div>
+      <div class="label">Enlik</div>
+      <div class="value" id="info-lat">40.3777° N</div>
+    </div>
+    <div>
+      <div class="label">Uzunluq</div>
+      <div class="value" id="info-lng">49.8920° E</div>
+    </div>
+  </div>
+  <div class="stat-row">
+    <span class="k">Baxış bucağı</span>
+    <span class="v" id="info-pitch">60°</span>
+  </div>
+  <div class="stat-row">
+    <span class="k">Yaxınlaşma</span>
+    <span class="v" id="info-zoom">15.2</span>
+  </div>
+  <div class="stat-row">
+    <span class="k">İstiqamət</span>
+    <span class="v" id="info-bearing">324°</span>
+  </div>
+  <div class="stat-row">
+    <span class="k">Hündürlük (təxmini)</span>
+    <span class="v" id="info-alt">~ 28 m</span>
+  </div>
+</div>
+
+<!-- Compass -->
+<div class="compass">
+  <div class="compass-ring">
+    <div class="compass-labels">
+      <span class="n">N</span>
+      <span class="s">S</span>
+      <span class="e">E</span>
+      <span class="w">W</span>
+    </div>
+    <div class="compass-arrow" id="compass-arrow"></div>
+    <div class="compass-south" id="compass-south"></div>
+  </div>
+  <div class="compass-readout">
+    <span id="compass-bearing" class="v">0°</span>
+    <span>·</span>
+    <span id="compass-pitch" class="v">0°</span>
+  </div>
+</div>
+
+<!-- Bottom-right controls -->
+<div class="controls">
+  <button class="ctrl-btn" id="btn-3d" title="3D buildings">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20V10l8-5 8 5v10M4 20h16M9 20v-7h6v7"/></svg>
+    <span class="ctrl-label">3D binalar</span>
+  </button>
+  <button class="ctrl-btn" id="btn-terrain" title="Terrain">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m3 20 5-8 4 5 3-4 6 7H3z"/><circle cx="17" cy="7" r="2"/></svg>
+    <span class="ctrl-label">Terrain</span>
+  </button>
+  <button class="ctrl-btn" id="btn-traffic" title="Traffic">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="2" width="6" height="20" rx="2"/><circle cx="12" cy="6.5" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="17.5" r="1.2" fill="currentColor"/></svg>
+    <span class="ctrl-label">Trafik</span>
+  </button>
+  <button class="ctrl-btn" id="btn-globe" title="Globe view">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a13 13 0 010 18M12 3a13 13 0 000 18"/></svg>
+    <span class="ctrl-label">Globe</span>
+  </button>
+  <button class="ctrl-btn" id="btn-zoom-in" title="Zoom in">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+  <button class="ctrl-btn" id="btn-zoom-out" title="Zoom out">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/></svg>
+  </button>
+  <button class="ctrl-btn" id="btn-reset" title="Reset north">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+    <span class="ctrl-label">Şimala sıfırla</span>
+  </button>
+</div>
+
+<!-- Traffic legend -->
+<div class="traffic-legend" id="traffic-legend">
+  <div class="tl-title">Trafik sıxlığı</div>
+  <div class="tl-row"><span class="tl-dot good"></span>Axar</div>
+  <div class="tl-row"><span class="tl-dot mod"></span>Orta</div>
+  <div class="tl-row"><span class="tl-dot bad"></span>Sıx</div>
+</div>
+
+<!-- Moon (visible only in space) -->
+<div id="moon" title="Aya gedin">
+  <div class="moon-body"></div>
+  <div class="moon-label">AY<span class="sub">→ KLİK</span></div>
+</div>
+
+<!-- Moon scene (fullscreen overlay when clicked) -->
+<div id="moon-scene">
+  <div class="stars"></div>
+  <div class="earth"></div>
+  <div class="moon-surface"></div>
+  <div class="moon-info">
+    <div class="kicker">Naturalı peyk · Selenografiya</div>
+    <h2>Ay</h2>
+    <p>Yer kürəsinin yeganə təbii peyki. Səthi krater və dəniz adlanan tünd düzənliklərlə örtülüdür. İlk insan eniş — Apollo 11, 1969.</p>
+    <div class="moon-stats">
+      <div><span class="k">Məsafə</span>384,400 km</div>
+      <div><span class="k">Diametr</span>3,474 km</div>
+      <div><span class="k">Cazibə</span>1.62 m/s²</div>
+      <div><span class="k">Period</span>27.3 gün</div>
+    </div>
+  </div>
+  <button class="back-btn" id="moon-back">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+    Yer kürəsinə qayıt
+  </button>
+</div>
+
+<!-- Route toggle button -->
+<button class="route-toggle" id="route-toggle">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M6 17V9a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v0"/></svg>
+  Marşrut
+</button>
+
+<!-- Route panel -->
+<div class="route-panel" id="route-panel">
+  <div class="route-header">
+    <div class="title">Marşrut planlayıcı</div>
+    <button class="close" id="route-close">×</button>
+  </div>
+  <div class="route-modes">
+    <button class="route-mode active" data-mode="driving">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 17h14M3 13h18l-2-6H5l-2 6z"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg>
+      Avtomobil
+    </button>
+    <button class="route-mode" data-mode="walking">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="13" cy="4" r="2"/><path d="M9 20l3-6 4 2-2 4M11 14l-2-4 4-2 3 4-2 2"/></svg>
+      Piyada
+    </button>
+  </div>
+  <div class="route-input from-input">
+    <input id="route-from" type="text" placeholder="Haradan? (başlanğıc nöqtəsi)" />
+    <button class="pick" id="pick-from" title="Xəritədən seç">📍</button>
+  </div>
+  <div class="route-input to-input">
+    <input id="route-to" type="text" placeholder="Hara? (təyinat)" />
+    <button class="pick" id="pick-to" title="Xəritədən seç">📍</button>
+  </div>
+  <div class="route-actions">
+    <button class="route-go" id="route-go">Yolu hesabla</button>
+    <button class="route-clear" id="route-clear">Sıfırla</button>
+  </div>
+  <div class="route-summary" id="route-summary">
+    <div class="big">
+      <span class="duration" id="route-duration">—</span>
+      <span class="distance" id="route-distance">—</span>
+    </div>
+    <div class="route-steps" id="route-steps"></div>
+  </div>
+</div>
+
+<!-- Status bar -->
+<div class="statusbar">
+  <span class="live">CANLI</span>
+  <span class="sep"></span>
+  <span>Render: <span class="val" id="stat-render">WebGL 3D</span></span>
+  <span class="sep"></span>
+  <span>Tile: <span class="val" id="stat-tile">vector/openstreetmap</span></span>
+  <span class="sep"></span>
+  <span>FPS: <span class="val" id="stat-fps">60</span></span>
+</div>
+
+<script>
+  /* =====================================================
+   *  Places (curated: AZ + international)
+   * ===================================================== */
+  const PLACES = [
+    { name: 'Bakı', region: 'Azərbaycan', country: 'AZ', lng: 49.8671, lat: 40.4093, zoom: 15.5, pitch: 65, bearing: -20, flag: '⛰' },
+    { name: 'Qəbələ', region: 'Azərbaycan', country: 'AZ', lng: 47.8455, lat: 40.9935, zoom: 12, pitch: 65, bearing: 0, flag: '▲' },
+    { name: 'Şəki', region: 'Azərbaycan', country: 'AZ', lng: 47.1995, lat: 41.1975, zoom: 13.5, pitch: 65, bearing: 10, flag: '◈' },
+    { name: 'İstanbul', region: 'Türkiyə', country: 'TR', lng: 28.9784, lat: 41.0082, zoom: 14, pitch: 60, bearing: -30, flag: '◉' },
+    { name: 'Paris', region: 'Fransa', country: 'FR', lng: 2.2945, lat: 48.8584, zoom: 15.5, pitch: 65, bearing: -17, flag: '✦' },
+    { name: 'Nyu-York', region: 'ABŞ', country: 'US', lng: -73.9857, lat: 40.7484, zoom: 15.5, pitch: 65, bearing: 25, flag: '⬢' },
+    { name: 'Tokio', region: 'Yaponiya', country: 'JP', lng: 139.7454, lat: 35.6586, zoom: 15.3, pitch: 60, bearing: 0, flag: '◎' },
+    { name: 'London', region: 'Birləşmiş Krallıq', country: 'UK', lng: -0.1246, lat: 51.5007, zoom: 15, pitch: 60, bearing: -10, flag: '◇' },
+    { name: 'Dubay', region: 'BƏƏ', country: 'AE', lng: 55.2744, lat: 25.1972, zoom: 15, pitch: 65, bearing: 0, flag: '◆' },
+    { name: 'Barselona', region: 'İspaniya', country: 'ES', lng: 2.1734, lat: 41.3851, zoom: 14.5, pitch: 60, bearing: 20, flag: '✧' },
+    { name: 'Singapur', region: 'Singapur', country: 'SG', lng: 103.8518, lat: 1.2908, zoom: 15, pitch: 60, bearing: -15, flag: '◉' },
+    { name: 'San-Fransisko', region: 'ABŞ', country: 'US', lng: -122.4194, lat: 37.7749, zoom: 14, pitch: 60, bearing: 10, flag: '▼' },
+    { name: 'Sidney', region: 'Avstraliya', country: 'AU', lng: 151.2153, lat: -33.8568, zoom: 15, pitch: 65, bearing: -5, flag: '◐' },
+    { name: 'Rio-de-Janeyro', region: 'Braziliya', country: 'BR', lng: -43.1729, lat: -22.9068, zoom: 13, pitch: 65, bearing: 0, flag: '☉' },
+    { name: 'Qahirə (Piramidalar)', region: 'Misir', country: 'EG', lng: 31.1342, lat: 29.9792, zoom: 15, pitch: 70, bearing: -45, flag: '△' },
+    { name: 'Mount Everest', region: 'Nepal', country: 'NP', lng: 86.9250, lat: 27.9881, zoom: 12, pitch: 75, bearing: 30, flag: '▲' },
+  ];
+
+  /* =====================================================
+   *  Map style — dark CartoDB raster (no API key, free)
+   *  with a vector 3D-buildings overlay from OSM data
+   * ===================================================== */
+  const DARK_STYLE = {
+    version: 8,
+    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+    sources: {
+      'carto-dark': {
+        type: 'raster',
+        tiles: [
+          'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+          'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+          'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+          'https://d.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'
+        ],
+        tileSize: 256,
+        attribution: '© OpenStreetMap contributors © CARTO'
+      },
+      'terrain-dem': {
+        type: 'raster-dem',
+        tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+        tileSize: 256,
+        encoding: 'terrarium',
+        maxzoom: 15
+      }
+    },
+    layers: [
+      { id: 'bg', type: 'background', paint: { 'background-color': '#0a0d12' } },
+      { id: 'carto-dark', type: 'raster', source: 'carto-dark',
+        paint: { 'raster-fade-duration': 300 } }
+    ],
+    sky_disabled: {
+      'sky-color': '#0c1220',
+      'sky-horizon-blend': 0.5,
+      'horizon-color': '#1a2233',
+      'horizon-fog-blend': 0.5,
+      'fog-color': '#0a0d12',
+      'fog-ground-blend': 0.4,
+    }
+  };
+
+  /* =====================================================
+   *  Init map
+   * ===================================================== */
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: DARK_STYLE,
+    center: [49.8671, 40.4093],
+    zoom: 14.8,
+    pitch: 65,
+    bearing: -20,
+    antialias: true,
+    attributionControl: { compact: true },
+    hash: false,
+  });
+
+  /* =====================================================
+   *  3D Buildings — fetched as GeoJSON from OSM Overpass
+   *  around the current view when zoomed in enough.
+   * ===================================================== */
+  let buildingsLoaded = false;
+  let buildingsVisible = true;
+  let lastBuildingsFetch = 0;
+  let lastBuildingsBBox = null;
+
+  function bboxOverlap(a, b) {
+    return a && b && a[0] <= b[0] && a[1] <= b[1] && a[2] >= b[2] && a[3] >= b[3];
+  }
+
+  async function fetchBuildings() {
+    if (map.getZoom() < 14.5) return;
+    const now = Date.now();
+    if (now - lastBuildingsFetch < 1500) return;
+    const b = map.getBounds();
+    const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+    // Pad bbox for caching
+    const pad = [bbox[0]-0.003, bbox[1]-0.003, bbox[2]+0.003, bbox[3]+0.003];
+    if (bboxOverlap(lastBuildingsBBox, bbox)) return;
+    lastBuildingsFetch = now;
+    lastBuildingsBBox = pad;
+
+    const q = `[out:json][timeout:15];(way["building"](${pad[1]},${pad[0]},${pad[3]},${pad[2]}););out geom;`;
+    try {
+      const r = await fetch('https://overpass-api.de/api/interpreter', {
+        method: 'POST',
+        body: 'data=' + encodeURIComponent(q),
+      });
+      if (!r.ok) return;
+      const data = await r.json();
+      const features = [];
+      for (const el of data.elements || []) {
+        if (el.type === 'way' && el.geometry && el.geometry.length >= 4) {
+          const coords = el.geometry.map(g => [g.lon, g.lat]);
+          if (coords[0][0] !== coords[coords.length-1][0] || coords[0][1] !== coords[coords.length-1][1]) {
+            coords.push(coords[0]);
+          }
+          const tags = el.tags || {};
+          let height = parseFloat(tags.height);
+          if (isNaN(height)) {
+            const levels = parseFloat(tags['building:levels']);
+            height = !isNaN(levels) ? levels * 3.2 : 8 + Math.random() * 14;
+          }
+          // Stable hash for varied per-building palette
+          const hash = ((el.id * 2654435761) >>> 0) / 4294967295;
+          const btype = (tags.building || '').toLowerCase();
+          let category = 'standard';
+          if (['retail','commercial','office','supermarket'].includes(btype)) category = 'commercial';
+          else if (['industrial','warehouse','factory'].includes(btype)) category = 'industrial';
+          else if (['church','mosque','cathedral','temple','civic','government','public'].includes(btype)) category = 'landmark';
+          else if (height > 80) category = 'tower';
+          features.push({
+            type: 'Feature',
+            properties: {
+              height,
+              min_height: parseFloat(tags.min_height) || 0,
+              category,
+              hash,
+              name: tags.name || ''
+            },
+            geometry: { type: 'Polygon', coordinates: [coords] }
+          });
+        }
+      }
+      const geojson = { type: 'FeatureCollection', features };
+      if (map.getSource('buildings')) {
+        map.getSource('buildings').setData(geojson);
+      } else {
+        map.addSource('buildings', { type: 'geojson', data: geojson });
+
+        // Ground footprint (deeper shade — gives buildings a "base shadow")
+        map.addLayer({
+          id: '3d-buildings-base',
+          type: 'fill',
+          source: 'buildings',
+          minzoom: 14,
+          layout: { visibility: buildingsVisible ? 'visible' : 'none' },
+          paint: {
+            'fill-color': '#13182a',
+            'fill-opacity': 0.45
+          }
+        });
+
+        // Main extrusion — varied palette by category + hash
+        map.addLayer({
+          id: '3d-buildings',
+          type: 'fill-extrusion',
+          source: 'buildings',
+          minzoom: 14,
+          layout: { visibility: buildingsVisible ? 'visible' : 'none' },
+          paint: {
+            'fill-extrusion-color': [
+              'case',
+              ['==', ['get', 'category'], 'tower'],
+              ['interpolate', ['linear'], ['get', 'hash'],
+                0, '#5a6788',
+                0.5, '#6e7c9f',
+                1, '#8694b8'],
+              ['==', ['get', 'category'], 'commercial'],
+              ['interpolate', ['linear'], ['get', 'hash'],
+                0, '#4a5072',
+                0.5, '#56607f',
+                1, '#65728f'],
+              ['==', ['get', 'category'], 'industrial'],
+              ['interpolate', ['linear'], ['get', 'hash'],
+                0, '#3a3f50',
+                1, '#454c62'],
+              ['==', ['get', 'category'], 'landmark'],
+              ['interpolate', ['linear'], ['get', 'hash'],
+                0, '#8c6a47',
+                0.5, '#a47e57',
+                1, '#b8966c'],
+              // standard residential
+              ['interpolate', ['linear'], ['get', 'hash'],
+                0, '#2d3142',
+                0.25, '#363b50',
+                0.5, '#404660',
+                0.75, '#4a5170',
+                1, '#555d80']
+            ],
+            'fill-extrusion-height': [
+              'interpolate', ['linear'], ['zoom'],
+              14, 0,
+              15.5, ['get', 'height']
+            ],
+            'fill-extrusion-base': ['get', 'min_height'],
+            'fill-extrusion-opacity': 0.95,
+            'fill-extrusion-vertical-gradient': true,
+          }
+        });
+
+        // Roof highlight — same polygons, raised, lighter color, narrow band
+        map.addLayer({
+          id: '3d-buildings-roof',
+          type: 'fill-extrusion',
+          source: 'buildings',
+          minzoom: 15.5,
+          layout: { visibility: buildingsVisible ? 'visible' : 'none' },
+          paint: {
+            'fill-extrusion-color': [
+              'case',
+              ['==', ['get', 'category'], 'landmark'], '#d6b48a',
+              ['==', ['get', 'category'], 'tower'], '#a8b3d0',
+              '#7c87a8'
+            ],
+            'fill-extrusion-height': ['+', ['get', 'height'], 0.6],
+            'fill-extrusion-base': ['get', 'height'],
+            'fill-extrusion-opacity': 0.9,
+          }
+        });
+
+        // Window-glow halo for tall towers (subtle warm light)
+        map.addLayer({
+          id: '3d-buildings-glow',
+          type: 'fill-extrusion',
+          source: 'buildings',
+          minzoom: 15.5,
+          filter: ['>', ['get', 'height'], 40],
+          layout: { visibility: buildingsVisible ? 'visible' : 'none' },
+          paint: {
+            'fill-extrusion-color': '#ffb86b',
+            'fill-extrusion-height': ['*', ['get', 'height'], 0.95],
+            'fill-extrusion-base': ['*', ['get', 'height'], 0.15],
+            'fill-extrusion-opacity': 0.06,
+          }
+        });
+      }
+      buildingsLoaded = true;
+    } catch(e) { console.warn('buildings fetch failed', e); }
+  }
+
+  function hideLoader() {
+    document.getElementById('loader').classList.add('hide');
+  }
+
+  // Safety net: hide the loader no matter what after 2.5s
+  setTimeout(hideLoader, 2500);
+
+  map.on('load', () => {
+    hideLoader();
+
+    // Initial info
+    updateInfo({ name: 'Bakı', region: 'Azərbaycan · Xəzər dənizi sahili' });
+    renderPlaces();
+    addMarker(map.getCenter());
+
+    // Cinematic spin-in
+    map.easeTo({
+      pitch: 65,
+      bearing: -30,
+      duration: 2800,
+      easing: t => t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2,
+    });
+
+    fetchBuildings();
+  });
+
+  map.on('moveend', () => {
+    fetchBuildings();
+  });
+
+  map.on('error', (e) => {
+    console.warn('map error', e && e.error);
+  });
+
+  /* =====================================================
+   *  Current location marker (orange pulse)
+   * ===================================================== */
+  let activeMarker = null;
+  function addMarker(lngLat) {
+    if (activeMarker) activeMarker.remove();
+    const el = document.createElement('div');
+    el.style.cssText = `
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      background: radial-gradient(circle, #ff7a3d 0%, #c8461c 100%);
+      box-shadow:
+        0 0 0 3px rgba(255,122,61,0.2),
+        0 0 20px rgba(255,122,61,0.8),
+        inset 0 1px 1px rgba(255,255,255,0.4);
+      position: relative;
+    `;
+    const pulse = document.createElement('div');
+    pulse.style.cssText = `
+      position: absolute; inset: -8px;
+      border-radius: 50%;
+      border: 2px solid #ff7a3d;
+      animation: markerPulse 2s infinite ease-out;
+      pointer-events: none;
+    `;
+    el.appendChild(pulse);
+    activeMarker = new maplibregl.Marker({ element: el, anchor: 'center' })
+      .setLngLat(lngLat)
+      .addTo(map);
+  }
+
+  // Add the pulse keyframes
+  const styleTag = document.createElement('style');
+  styleTag.textContent = `
+    @keyframes markerPulse {
+      0% { transform: scale(1); opacity: 1; }
+      100% { transform: scale(2.5); opacity: 0; }
+    }
+  `;
+  document.head.appendChild(styleTag);
+
+  /* =====================================================
+   *  Places list
+   * ===================================================== */
+  function renderPlaces() {
+    const list = document.getElementById('place-list');
+    list.innerHTML = '';
+    document.getElementById('place-count').textContent = PLACES.length.toString().padStart(2, '0');
+    PLACES.forEach((p, i) => {
+      const item = document.createElement('div');
+      item.className = 'place-item' + (i === 0 ? ' active' : '');
+      item.innerHTML = `
+        <div class="place-flag">${p.flag}</div>
+        <div class="place-info">
+          <div class="place-name">${p.name}</div>
+          <div class="place-region">${p.region.toUpperCase()} · ${p.lat.toFixed(2)}°, ${p.lng.toFixed(2)}°</div>
+        </div>
+      `;
+      item.onclick = () => {
+        document.querySelectorAll('.place-item').forEach(n => n.classList.remove('active'));
+        item.classList.add('active');
+        flyToPlace(p);
+      };
+      list.appendChild(item);
+    });
+  }
+
+  function flyToPlace(p) {
+    map.flyTo({
+      center: [p.lng, p.lat],
+      zoom: p.zoom,
+      pitch: p.pitch,
+      bearing: p.bearing,
+      duration: 3200,
+      essential: true,
+      curve: 1.6,
+      speed: 1.1,
+      easing: t => t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2,
+    });
+    updateInfo(p);
+    addMarker([p.lng, p.lat]);
+  }
+
+  /* =====================================================
+   *  Info card
+   * ===================================================== */
+  function updateInfo(p) {
+    if (p.name) document.getElementById('info-name').textContent = p.name;
+    if (p.region) document.getElementById('info-region').textContent = p.region;
+    if (typeof p.lat === 'number') {
+      document.getElementById('info-lat').textContent = `${Math.abs(p.lat).toFixed(4)}° ${p.lat >= 0 ? 'N' : 'S'}`;
+    }
+    if (typeof p.lng === 'number') {
+      document.getElementById('info-lng').textContent = `${Math.abs(p.lng).toFixed(4)}° ${p.lng >= 0 ? 'E' : 'W'}`;
+    }
+  }
+
+  /* =====================================================
+   *  Compass + live readouts (on move)
+   * ===================================================== */
+  const compassArrow = document.getElementById('compass-arrow');
+  const compassSouth = document.getElementById('compass-south');
+  const cb = document.getElementById('compass-bearing');
+  const cp = document.getElementById('compass-pitch');
+  const ipitch = document.getElementById('info-pitch');
+  const izoom = document.getElementById('info-zoom');
+  const ibearing = document.getElementById('info-bearing');
+  const ilat = document.getElementById('info-lat');
+  const ilng = document.getElementById('info-lng');
+  const ialt = document.getElementById('info-alt');
+
+  map.on('move', () => {
+    const bearing = map.getBearing();
+    const pitch = map.getPitch();
+    const zoom = map.getZoom();
+    const c = map.getCenter();
+
+    compassArrow.style.transform = `translate(-50%, -100%) rotate(${-bearing}deg)`;
+    compassSouth.style.transform = `translate(-50%, 0) rotate(${-bearing}deg)`;
+
+    cb.textContent = `${Math.round(((bearing % 360) + 360) % 360)}°`;
+    cp.textContent = `${Math.round(pitch)}°`;
+
+    ipitch.textContent = `${Math.round(pitch)}°`;
+    izoom.textContent = zoom.toFixed(1);
+    ibearing.textContent = `${Math.round(((bearing % 360) + 360) % 360)}°`;
+    ilat.textContent = `${Math.abs(c.lat).toFixed(4)}° ${c.lat >= 0 ? 'N' : 'S'}`;
+    ilng.textContent = `${Math.abs(c.lng).toFixed(4)}° ${c.lng >= 0 ? 'E' : 'W'}`;
+
+    // rough altitude estimate based on zoom (camera height)
+    const alt = Math.max(1, Math.round(40075000 / Math.pow(2, zoom) / 4));
+    ialt.textContent = alt > 1000 ? `~ ${(alt/1000).toFixed(1)} km` : `~ ${alt} m`;
+  });
+
+  /* =====================================================
+   *  Controls
+   * ===================================================== */
+  const btn3d = document.getElementById('btn-3d');
+  const btnTerrain = document.getElementById('btn-terrain');
+  const btnGlobe = document.getElementById('btn-globe');
+
+  btn3d.classList.add('active');
+  btn3d.onclick = () => {
+    buildingsVisible = !buildingsVisible;
+    ['3d-buildings','3d-buildings-base','3d-buildings-roof','3d-buildings-glow'].forEach(id => {
+      if (map.getLayer(id)) {
+        map.setLayoutProperty(id, 'visibility', buildingsVisible ? 'visible' : 'none');
+      }
+    });
+    if (buildingsVisible && !map.getLayer('3d-buildings')) fetchBuildings();
+    btn3d.classList.toggle('active', buildingsVisible);
+  };
+
+  let terrainOn = false;
+  btnTerrain.onclick = () => {
+    terrainOn = !terrainOn;
+    try {
+      if (terrainOn) {
+        map.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
+      } else {
+        map.setTerrain(null);
+      }
+      btnTerrain.classList.toggle('active', terrainOn);
+    } catch(e) { console.warn(e); }
+  };
+
+  let globeOn = false;
+  let transitioning = false;
+
+  function setGlobe(on, animate) {
+    if (on === globeOn || transitioning) return;
+    globeOn = on;
+    transitioning = true;
+
+    const cosmos = document.getElementById('cosmos');
+    const atmos = document.getElementById('atmosphere');
+
+    if (on) {
+      // 1) fade in cosmos + atmosphere + moon
+      cosmos.classList.add('on');
+      atmos.classList.add('on');
+      document.getElementById('moon').classList.add('on');
+      // 2) flatten pitch smoothly
+      map.easeTo({ pitch: 0, duration: 900, easing: t => 1 - Math.pow(1 - t, 3) });
+      // 3) switch projection mid-way once pitch is flat
+      setTimeout(() => {
+        try { map.setProjection({ type: 'globe' }); } catch(e) { console.warn('globe err', e); }
+        btnGlobe.classList.add('active');
+        if (animate) {
+          map.flyTo({
+            center: map.getCenter(),
+            zoom: 1.6,
+            pitch: 0,
+            bearing: map.getBearing(),
+            duration: 2600,
+            curve: 1.6,
+            speed: 0.8,
+            essential: true,
+            easing: t => t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2,
+          });
+        }
+        setTimeout(() => {
+          transitioning = false;
+          startGlobeSpin();
+        }, animate ? 2700 : 400);
+      }, 800);
+    } else {
+      // exit globe
+      stopGlobeSpin();
+      try { map.setProjection({ type: 'mercator' }); } catch(e) {}
+      btnGlobe.classList.remove('active');
+      cosmos.classList.remove('on');
+      atmos.classList.remove('on');
+      document.getElementById('moon').classList.remove('on');
+      setTimeout(() => { transitioning = false; }, 400);
+    }
+  }
+
+  btnGlobe.onclick = () => {
+    if (!globeOn) setGlobe(true, true);
+    else {
+      setGlobe(false, false);
+      map.easeTo({ zoom: Math.max(map.getZoom(), 6), pitch: 50, duration: 1400 });
+    }
+  };
+
+  // Auto-enter globe when zoomed far out, auto-exit when zoomed in
+  map.on('zoom', () => {
+    if (transitioning) return;
+    const z = map.getZoom();
+    if (z < 3.2 && !globeOn) setGlobe(true, false);
+    else if (z > 5 && globeOn) setGlobe(false, false);
+  });
+
+  // Slow auto-rotation while on globe and user is idle
+  let spinRaf = null;
+  let lastInteraction = performance.now();
+  ['mousedown','wheel','touchstart','dragstart'].forEach(evt => {
+    map.getCanvas().addEventListener(evt, () => { lastInteraction = performance.now(); });
+  });
+  function startGlobeSpin() {
+    if (spinRaf) return;
+    const step = () => {
+      if (!globeOn) { spinRaf = null; return; }
+      const idle = performance.now() - lastInteraction > 1800;
+      if (idle && !map.isMoving()) {
+        const c = map.getCenter();
+        map.setCenter([c.lng + 0.08, c.lat]);
+      }
+      spinRaf = requestAnimationFrame(step);
+    };
+    spinRaf = requestAnimationFrame(step);
+  }
+  function stopGlobeSpin() {
+    if (spinRaf) cancelAnimationFrame(spinRaf);
+    spinRaf = null;
+  }
+
+  /* =====================================================
+   *  Starfield on the cosmos canvas
+   * ===================================================== */
+  (function initStarfield(){
+    const canvas = document.getElementById('cosmos');
+    const ctx = canvas.getContext('2d');
+    let stars = [];
+    function resize() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = innerWidth * dpr;
+      canvas.height = innerHeight * dpr;
+      canvas.style.width = innerWidth + 'px';
+      canvas.style.height = innerHeight + 'px';
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      // regenerate stars proportional to area
+      const count = Math.min(520, Math.round((innerWidth * innerHeight) / 3800));
+      stars = new Array(count).fill(0).map(() => ({
+        x: Math.random() * innerWidth,
+        y: Math.random() * innerHeight,
+        r: Math.random() * 1.2 + 0.2,
+        a: Math.random() * 0.8 + 0.2,
+        tw: Math.random() * 0.02 + 0.005,
+        ph: Math.random() * Math.PI * 2,
+      }));
+    }
+    resize();
+    addEventListener('resize', resize);
+
+    function frame(t) {
+      ctx.clearRect(0, 0, innerWidth, innerHeight);
+      for (const s of stars) {
+        const alpha = s.a * (0.6 + 0.4 * Math.sin(t * s.tw + s.ph));
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+        ctx.fill();
+        if (s.r > 1) {
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.r * 3, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(180,210,255,${alpha * 0.08})`;
+          ctx.fill();
+        }
+      }
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  })();
+
+  /* =====================================================
+   *  TRAFFIC layer — fetches major roads from Overpass
+   *  and colors them green/yellow/red with a time-of-day
+   *  heuristic (live data would need a paid provider).
+   * ===================================================== */
+  let trafficOn = false;
+  let lastTrafficFetch = 0;
+  let lastTrafficBBox = null;
+
+  async function fetchTraffic() {
+    if (!trafficOn) return;
+    if (map.getZoom() < 11) return;
+    const now = Date.now();
+    if (now - lastTrafficFetch < 2500) return;
+    const b = map.getBounds();
+    const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+    const pad = [bbox[0]-0.01, bbox[1]-0.01, bbox[2]+0.01, bbox[3]+0.01];
+    if (bboxOverlap(lastTrafficBBox, bbox)) return;
+    lastTrafficFetch = now;
+    lastTrafficBBox = pad;
+
+    const q = `[out:json][timeout:15];(way["highway"~"motorway|trunk|primary|secondary|tertiary"](${pad[1]},${pad[0]},${pad[3]},${pad[2]}););out geom;`;
+    try {
+      const r = await fetch('https://overpass-api.de/api/interpreter', {
+        method: 'POST',
+        body: 'data=' + encodeURIComponent(q),
+      });
+      if (!r.ok) return;
+      const data = await r.json();
+      const feats = [];
+      const hour = new Date().getHours();
+      // rush-hour weighting
+      const rush = (hour >= 8 && hour <= 10) || (hour >= 17 && hour <= 20) ? 1
+                 : (hour >= 6 && hour <= 22) ? 0.55 : 0.2;
+      for (const el of data.elements || []) {
+        if (!el.geometry || el.geometry.length < 2) continue;
+        const coords = el.geometry.map(g => [g.lon, g.lat]);
+        const tags = el.tags || {};
+        // Pseudo-congestion: weighted by road class + rush + stable per-way hash
+        const classWeight = { motorway: 0.9, trunk: 0.8, primary: 0.7, secondary: 0.55, tertiary: 0.4 }[tags.highway] || 0.5;
+        const hash = ((el.id * 9301 + 49297) % 233280) / 233280;
+        const score = Math.min(1, rush * classWeight * (0.5 + hash));
+        const level = score > 0.72 ? 'heavy' : score > 0.48 ? 'moderate' : 'flowing';
+        feats.push({
+          type: 'Feature',
+          properties: { level, score, name: tags.name || tags.ref || tags.highway },
+          geometry: { type: 'LineString', coordinates: coords }
+        });
+      }
+      const geojson = { type: 'FeatureCollection', features: feats };
+      if (map.getSource('traffic')) {
+        map.getSource('traffic').setData(geojson);
+      } else {
+        map.addSource('traffic', { type: 'geojson', data: geojson });
+        // Glow under
+        map.addLayer({
+          id: 'traffic-glow',
+          type: 'line',
+          source: 'traffic',
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': ['match', ['get', 'level'],
+              'heavy', '#ff3d5c',
+              'moderate', '#ffb03d',
+              '#3dd38a'
+            ],
+            'line-width': ['interpolate', ['linear'], ['zoom'], 10, 4, 16, 14],
+            'line-opacity': 0.25,
+            'line-blur': 6
+          }
+        });
+        map.addLayer({
+          id: 'traffic-line',
+          type: 'line',
+          source: 'traffic',
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': ['match', ['get', 'level'],
+              'heavy', '#ff3d5c',
+              'moderate', '#ffb03d',
+              '#3dd38a'
+            ],
+            'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1.6, 16, 5],
+            'line-opacity': 0.95
+          }
+        });
+      }
+      // toggle visibility based on current state
+      setTrafficLayerVisibility(trafficOn);
+    } catch(e) { console.warn('traffic fetch failed', e); }
+  }
+
+  function setTrafficLayerVisibility(on) {
+    ['traffic-glow','traffic-line'].forEach(id => {
+      if (map.getLayer(id)) {
+        map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+      }
+    });
+    document.getElementById('traffic-legend').classList.toggle('on', on);
+  }
+
+  map.on('moveend', () => {
+    if (trafficOn) fetchTraffic();
+  });
+
+  document.getElementById('btn-zoom-in').onclick = () => map.zoomIn({ duration: 400 });
+  document.getElementById('btn-zoom-out').onclick = () => map.zoomOut({ duration: 400 });
+  document.getElementById('btn-reset').onclick = () => map.easeTo({ bearing: 0, pitch: 0, duration: 1000 });
+
+  const btnTraffic = document.getElementById('btn-traffic');
+  btnTraffic.onclick = () => {
+    trafficOn = !trafficOn;
+    btnTraffic.classList.toggle('active', trafficOn);
+    if (trafficOn) fetchTraffic();
+    setTrafficLayerVisibility(trafficOn);
+  };
+
+  /* =====================================================
+   *  SEARCH — uses Nominatim (free OSM geocoder) for
+   *  "go anywhere" functionality. No API key needed.
+   * ===================================================== */
+  const searchInput = document.getElementById('search-input');
+  const searchResults = document.getElementById('search-results');
+  let searchTimer;
+
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    const q = searchInput.value.trim();
+    if (q.length < 2) {
+      searchResults.classList.remove('open');
+      searchResults.innerHTML = '';
+      return;
+    }
+    searchResults.classList.add('open');
+    searchResults.innerHTML = '<div class="search-loading">Axtarılır...</div>';
+    searchTimer = setTimeout(() => doSearch(q), 320);
+  });
+
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const first = searchResults.querySelector('.search-result');
+      if (first) first.click();
+    } else if (e.key === 'Escape') {
+      searchResults.classList.remove('open');
+      searchInput.blur();
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.search-wrap')) {
+      searchResults.classList.remove('open');
+    }
+  });
+
+  async function doSearch(q) {
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=6&accept-language=az,en`;
+      const r = await fetch(url, {
+        headers: { 'Accept': 'application/json' },
+      });
+      if (!r.ok) throw new Error('search failed');
+      const data = await r.json();
+      renderSearchResults(data);
+    } catch(e) {
+      searchResults.innerHTML = '<div class="search-empty">Axtarış mümkün olmadı. İnternet bağlantısını yoxlayın.</div>';
+    }
+  }
+
+  function renderSearchResults(items) {
+    if (!items || !items.length) {
+      searchResults.innerHTML = '<div class="search-empty">Heç bir nəticə tapılmadı</div>';
+      return;
+    }
+    searchResults.innerHTML = '';
+    items.forEach(it => {
+      const lat = parseFloat(it.lat);
+      const lng = parseFloat(it.lon);
+      const mainName = it.display_name.split(',')[0];
+      const rest = it.display_name.split(',').slice(1).join(',').trim();
+      const div = document.createElement('div');
+      div.className = 'search-result';
+      div.innerHTML = `
+        <div class="pin">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s-8-7.5-8-13a8 8 0 1 1 16 0c0 5.5-8 13-8 13z"/><circle cx="12" cy="9" r="2.5"/></svg>
+        </div>
+        <div class="info">
+          <div class="name">${mainName}</div>
+          <div class="desc">${rest} · ${lat.toFixed(3)}°, ${lng.toFixed(3)}°</div>
+        </div>
+      `;
+      div.onclick = () => {
+        const type = (it.type || '').toLowerCase();
+        // cities/towns get closer zoom; countries pull back
+        let zoom = 14;
+        if (['country'].includes(type) || it.class === 'boundary') zoom = 5;
+        else if (['state', 'region'].includes(type)) zoom = 7;
+        else if (['city', 'county'].includes(type)) zoom = 12;
+        else if (['town', 'village', 'suburb'].includes(type)) zoom = 14;
+        else if (['building', 'house', 'shop'].includes(type)) zoom = 17;
+        else zoom = 14;
+
+        flyToPlace({
+          name: mainName,
+          region: rest || '—',
+          lat, lng, zoom,
+          pitch: 65, bearing: -15,
+        });
+        searchResults.classList.remove('open');
+        searchInput.value = mainName;
+        document.querySelectorAll('.place-item').forEach(n => n.classList.remove('active'));
+      };
+      searchResults.appendChild(div);
+    });
+  }
+
+  // Keyboard shortcut '/' to focus search
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && document.activeElement !== searchInput) {
+      e.preventDefault();
+      searchInput.focus();
+      searchInput.select();
+    }
+  });
+
+  // FPS counter
+  let frames = 0, lastTs = performance.now();
+  function tickFps() {
+    frames++;
+    const now = performance.now();
+    if (now - lastTs >= 1000) {
+      const fps = Math.round((frames * 1000) / (now - lastTs));
+      document.getElementById('stat-fps').textContent = Math.min(fps, 60);
+      frames = 0; lastTs = now;
+    }
+    requestAnimationFrame(tickFps);
+  }
+  requestAnimationFrame(tickFps);
+
+  /* MOON click → moon scene */
+  document.getElementById('moon').onclick = () => {
+    document.getElementById('moon-scene').classList.add('on');
+  };
+  document.getElementById('moon-back').onclick = () => {
+    document.getElementById('moon-scene').classList.remove('on');
+  };
+
+  /* ROUTING */
+  const routeToggle = document.getElementById('route-toggle');
+  const routePanel = document.getElementById('route-panel');
+  const routeFromInput = document.getElementById('route-from');
+  const routeToInput = document.getElementById('route-to');
+  const pickFromBtn = document.getElementById('pick-from');
+  const pickToBtn = document.getElementById('pick-to');
+  const routeGoBtn = document.getElementById('route-go');
+  const routeClearBtn = document.getElementById('route-clear');
+  const routeSummary = document.getElementById('route-summary');
+  const routeDuration = document.getElementById('route-duration');
+  const routeDistance = document.getElementById('route-distance');
+  const routeStepsEl = document.getElementById('route-steps');
+  const routeModes = document.querySelectorAll('.route-mode');
+
+  let routeMode = 'driving';
+  let routeFrom = null, routeTo = null;
+  let pickArmed = null;
+  let routeMarkers = [];
+
+  routeToggle.onclick = () => routePanel.classList.add('open');
+  document.getElementById('route-close').onclick = () => routePanel.classList.remove('open');
+
+  routeModes.forEach(b => {
+    b.onclick = () => {
+      routeModes.forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      routeMode = b.dataset.mode;
+      if (routeFrom && routeTo) computeRoute();
+    };
+  });
+
+  function armPick(which, btn) {
+    pickArmed = which;
+    document.querySelectorAll('.pick').forEach(b => b.classList.remove('armed'));
+    if (btn) btn.classList.add('armed');
+    map.getCanvas().style.cursor = 'crosshair';
+  }
+  pickFromBtn.onclick = () => armPick('from', pickFromBtn);
+  pickToBtn.onclick = () => armPick('to', pickToBtn);
+
+  async function onPickPoint(lngLat) {
+    const { lng, lat } = lngLat;
+    const which = pickArmed;
+    pickArmed = null;
+    document.querySelectorAll('.pick').forEach(b => b.classList.remove('armed'));
+    map.getCanvas().style.cursor = '';
+    let label = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&accept-language=az,en`);
+      const d = await r.json();
+      label = d.display_name?.split(',').slice(0,2).join(', ') || label;
+    } catch(_) {}
+    if (which === 'from') { routeFrom = [lng, lat]; routeFromInput.value = label; }
+    else { routeTo = [lng, lat]; routeToInput.value = label; }
+    addRouteMarker(lngLat, which);
+    if (routeFrom && routeTo) computeRoute();
+  }
+
+  async function geocodeText(q) {
+    const r = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&accept-language=az,en`);
+    const d = await r.json();
+    if (!d || !d.length) return null;
+    return [parseFloat(d[0].lon), parseFloat(d[0].lat)];
+  }
+
+  function addRouteMarker(lngLat, kind) {
+    routeMarkers = routeMarkers.filter(m => {
+      if (m._kind === kind) { m.remove(); return false; }
+      return true;
+    });
+    const el = document.createElement('div');
+    const color = kind === 'from' ? '#3dd38a' : '#ff7a3d';
+    el.style.cssText = `width:18px;height:18px;border-radius:50%;background:${color};box-shadow:0 0 0 4px rgba(0,0,0,0.4),0 0 14px ${color};border:2px solid #fff;`;
+    const m = new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(map);
+    m._kind = kind;
+    routeMarkers.push(m);
+  }
+
+  routeGoBtn.onclick = async () => {
+    if (!routeFrom && routeFromInput.value) routeFrom = await geocodeText(routeFromInput.value);
+    if (!routeTo && routeToInput.value) routeTo = await geocodeText(routeToInput.value);
+    if (routeFrom) addRouteMarker({ lng: routeFrom[0], lat: routeFrom[1] }, 'from');
+    if (routeTo) addRouteMarker({ lng: routeTo[0], lat: routeTo[1] }, 'to');
+    if (routeFrom && routeTo) computeRoute();
+  };
+
+  routeClearBtn.onclick = () => {
+    routeFrom = routeTo = null;
+    routeFromInput.value = ''; routeToInput.value = '';
+    routeMarkers.forEach(m => m.remove()); routeMarkers = [];
+    if (map.getLayer('route-line')) map.removeLayer('route-line');
+    if (map.getLayer('route-glow')) map.removeLayer('route-glow');
+    if (map.getSource('route')) map.removeSource('route');
+    routeSummary.classList.remove('on');
+  };
+
+  async function computeRoute() {
+    const profile = routeMode === 'walking' ? 'foot' : 'driving';
+    const url = `https://router.project-osrm.org/route/v1/${profile}/${routeFrom[0]},${routeFrom[1]};${routeTo[0]},${routeTo[1]}?overview=full&geometries=geojson&steps=true`;
+    try {
+      const r = await fetch(url);
+      const d = await r.json();
+      if (!d.routes || !d.routes.length) { alert('Marşrut tapılmadı'); return; }
+      const route = d.routes[0];
+      drawRoute(route.geometry);
+      const mins = Math.round(route.duration / 60);
+      routeDuration.textContent = mins >= 60 ? `${Math.floor(mins/60)} saat ${mins%60} dəq` : `${mins} dəqiqə`;
+      routeDistance.textContent = (route.distance / 1000).toFixed(2) + ' km · ' + (routeMode === 'walking' ? 'piyada' : 'avtomobil');
+      routeStepsEl.innerHTML = '';
+      const steps = route.legs[0].steps.slice(0, 30);
+      const dirMap = { left: 'sola', right: 'sağa', 'slight left': 'azca sola', 'slight right': 'azca sağa', 'sharp left': 'kəskin sola', 'sharp right': 'kəskin sağa', straight: 'düz' };
+      steps.forEach((s, i) => {
+        const m = s.maneuver || {};
+        const name = s.name || '';
+        const t = m.type || ''; const mod = m.modifier || '';
+        const d_ = dirMap[mod] || '';
+        let txt = '';
+        if (t === 'depart') txt = `Yola çıxın${name ? ' — ' + name : ''}`;
+        else if (t === 'arrive') txt = 'Təyinata çatdınız';
+        else if (t === 'turn') txt = `${d_ ? d_.charAt(0).toUpperCase()+d_.slice(1) : 'Dönün'}${name ? ' — ' + name : ''}`;
+        else if (t === 'new name') txt = `Davam edin — ${name}`;
+        else if (t === 'roundabout') txt = `Halqaya daxil olun${name ? ' — ' + name : ''}`;
+        else txt = `${t}${name ? ' — ' + name : ''}`;
+        const dist = s.distance < 1000 ? Math.round(s.distance) + ' m' : (s.distance/1000).toFixed(1) + ' km';
+        const div = document.createElement('div');
+        div.className = 'route-step';
+        div.innerHTML = `<span class="num">${(i+1).toString().padStart(2,'0')}</span><span class="txt">${txt}</span><span class="dist">${dist}</span>`;
+        routeStepsEl.appendChild(div);
+      });
+      routeSummary.classList.add('on');
+      const coords = route.geometry.coordinates;
+      const bounds = coords.reduce((b,c) => b.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
+      map.fitBounds(bounds, { padding: 80, duration: 1500, pitch: 50 });
+    } catch(e) {
+      alert('Marşrut hesablanmadı. İnternet bağlantısını yoxlayın.');
+    }
+  }
+
+  function drawRoute(geometry) {
+    if (map.getSource('route')) {
+      map.getSource('route').setData({ type: 'Feature', geometry });
+    } else {
+      map.addSource('route', { type: 'geojson', data: { type: 'Feature', geometry } });
+      map.addLayer({
+        id: 'route-glow', type: 'line', source: 'route',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#ff7a3d', 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 6, 16, 22], 'line-opacity': 0.25, 'line-blur': 8 }
+      });
+      map.addLayer({
+        id: 'route-line', type: 'line', source: 'route',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#ffb86b', 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 2, 16, 7], 'line-opacity': 0.95 }
+      });
+    }
+  }
+
+  // override map click for picking
+  const origClickHandler = (e) => {
+    if (pickArmed) { onPickPoint(e.lngLat); return true; }
+    return false;
+  };
+  map.on('click', (e) => { origClickHandler(e); });
+
+  /* =====================================================
+   *  Map click → reverse geocode
+   * ===================================================== */
+  map.on('click', async (e) => {
+    if (pickArmed) {
+      onPickPoint(e.lngLat);
+      return;
+    }
+    const { lng, lat } = e.lngLat;
+    addMarker([lng, lat]);
+    updateInfo({ name: 'Yüklənir...', region: '—', lat, lng });
+    try {
+      const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&accept-language=az,en`;
+      const r = await fetch(url);
+      const d = await r.json();
+      const name = d.name || d.display_name?.split(',')[0] || 'Seçilmiş nöqtə';
+      const region = d.display_name?.split(',').slice(1, 4).join(',').trim() || '—';
+      updateInfo({ name, region, lat, lng });
+    } catch(err) {
+      updateInfo({ name: 'Seçilmiş nöqtə', region: '—', lat, lng });
+    }
+  });
+
+</script>
+
+</body>
+</html>
